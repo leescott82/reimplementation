@@ -20,12 +20,7 @@ import tensorpack as tp
 
 mode="gen" # "train" or "gen"
 
-img_shape = (28, 28) # 28x28 MNIST images
-img_dim = 28*28  # flattened
 z_dim = 100
-
-hidden_layer_units_d = 512
-hidden_layer_units_g = 512
 alpha = 0.01 # for leaky ReLU
 
 batch_size = 64
@@ -71,30 +66,39 @@ def main(mode=mode):
 
 
 
-def generator(z, img_dim=img_dim, n_units=hidden_layer_units_g, reuse=False):
+def generator(z, reuse=False):
     """the generator (network)
     
     Args:
         z (tf.placeholder): Placeholder for variables z
-        img_dim: size of images, 
-        n_units: 
         reuse: 
-        alpha:
     Returns:
         out (tf.Tensor): generated imgs from z
     """
     with tf.variable_scope('generator', reuse=reuse):
+        w_init = tf.truncated_normal_initializer(mean=0, stddev=0.02)
+        b_init = tf.constant_initializer(0.)
         # hidden layers
-        net = tf.layers.dense(z, n_units, activation=tf.nn.relu)
-        net = tf.layers.dense(net, n_units, activation=tf.nn.relu)
+        w0 = tf.get_variable('g_w0', [100, 256], initializer=w_init)
+        b0 = tf.get_variable('g_b0', [256], initializer=b_init)
+        net = tf.nn.relu(tf.matmul(z, w0) + b0)
         
-        return tf.layers.dense(net, img_dim, activation=tf.nn.tanh)
+        w1 = tf.get_variable('g_w1', [256, 512], initializer=w_init)
+        b1 = tf.get_variable('g_b1', [512], initializer=b_init)
+        net = tf.nn.relu(tf.matmul(net, w1) + b1)
+        
+        w2 = tf.get_variable('g_w2', [512, 1024], initializer=w_init)
+        b2 = tf.get_variable('g_b2', [1024], initializer=b_init)
+        net = tf.nn.relu(tf.matmul(net, w2) + b2)
+        # output layer
+        w3 = tf.get_variable('g_w3', [1024, 784], initializer=w_init)
+        b3 = tf.get_variable('g_b3', [784], initializer=b_init)
+        return tf.nn.tanh(tf.matmul(net, w3) + b3)
 
-def discriminator(x, n_units=hidden_layer_units_d, reuse=False, alpha=alpha):
+def discriminator(x, reuse=False, alpha=alpha):
     """the discriminator (network)
     Args:
         x (tf.placeholder): Placeholder for images
-        n_units: 
         reuse: 
         alpha:
     Returns:
@@ -102,13 +106,24 @@ def discriminator(x, n_units=hidden_layer_units_d, reuse=False, alpha=alpha):
         logits (tf.Tensor): discriminating results
     """
     with tf.variable_scope('discriminator', reuse=reuse):
+        w_init = tf.truncated_normal_initializer(mean=0, stddev=0.02)
+        b_init = tf.constant_initializer(0.)
         # hidden layers
-        net = tf.layers.dense(x, n_units, activation=tf.identity)
-        net = tf.nn.leaky_relu(net, alpha=alpha)
-        net = tf.layers.dense(net, n_units, activation=tf.identity)
-        net = tf.nn.leaky_relu(net, alpha=alpha)
+        w0 = tf.get_variable('d_w0', [784, 1024], initializer=w_init)
+        b0 = tf.get_variable('d_b0', [1024], initializer=b_init)
+        net = tf.nn.leaky_relu(tf.matmul(x, w0) + b0, alpha=alpha)
         
-        return tf.layers.dense(net, 1, activation=tf.identity)
+        w1 = tf.get_variable('d_w1', [1024, 512], initializer=w_init)
+        b1 = tf.get_variable('d_b1', [512], initializer=b_init)
+        net = tf.nn.leaky_relu(tf.matmul(net, w1) + b1, alpha=alpha)
+        
+        w2 = tf.get_variable('d_w2', [512, 256], initializer=w_init)
+        b2 = tf.get_variable('d_b2', [256], initializer=b_init)
+        net = tf.nn.leaky_relu(tf.matmul(net, w2) + b2, alpha=alpha)
+        # output layer
+        w3 = tf.get_variable('d_w3', [256, 1], initializer=w_init)
+        b3 = tf.get_variable('d_b3', [1], initializer=b_init)
+        return tf.matmul(net, w3) + b3
 
 def loss_discriminator(logits_real, logits_fake):
     """compute the loss of discriminator (-original objective, so minimize later)
@@ -155,7 +170,7 @@ def make_graph():
         g_loss: tf.Tensor holding the resulting loss of discriminator, generator
     """
     # the inputs can be real images and latent variables z
-    inputs_img = tf.placeholder(tf.float32, (None, img_dim), name="inputs_img")
+    inputs_img = tf.placeholder(tf.float32, (None, 784), name="inputs_img")
     inputs_z = tf.placeholder(tf.float32, (None, z_dim), name="inputs_z")
     
     genert_img = generator(inputs_z, reuse=False)
@@ -201,11 +216,15 @@ def run_training(sess, training_iterator, d_train_op, g_train_op,
         g_loss (tf.Tensor): loss tensor
         nepochs (int): number of epochs to run training
     Returns:
-        samples: list of [9,28*28] np arrays, imgs generated at the end of each epoch
+        samples: list of [9,28*28] np arrays, imgs generated before training 
+                 and at the end of each epoch
         d_losses,
         g_losses: lists of losses of discriminator, generator
     """
-    samples = []
+    samples = [sess.run(
+                generator(inputs_z, reuse=True),
+                feed_dict={inputs_z: np.random.uniform(-1, 1, size=(9, z_dim))}
+                )]
     d_losses = []
     g_losses = []
     saver = tf.train.Saver(var_list =
@@ -217,7 +236,7 @@ def run_training(sess, training_iterator, d_train_op, g_train_op,
         training_iterator.reset_state()
         for batch_x, _ in training_iterator:
             # Reshape to feed it into the network
-            batch_x = batch_x.reshape(-1, img_dim)
+            batch_x = batch_x.reshape(-1, 784)
             batch_x = batch_x*2 - 1 # because we use tanh for output of generator
             
             batch_z = np.random.uniform(-1, 1, size=(batch_size, z_dim))
@@ -241,7 +260,8 @@ def run_training(sess, training_iterator, d_train_op, g_train_op,
         z = np.random.uniform(-1, 1, size=(9, z_dim))
         gen_samples = sess.run(
                        generator(inputs_z, reuse=True),
-                       feed_dict={inputs_z: z})
+                       feed_dict={inputs_z: z}
+                       )
         samples.append(gen_samples)
         saver.save(sess, './checkpoints/generator.ckpt')
     return samples, d_losses, g_losses
@@ -278,21 +298,33 @@ def plot_one_set_of_samples(samples, epoch, filename="samples_training_.png"):
     fig = plt.figure(figsize=(7,7))
     for i, img in enumerate(samples[epoch]):
         ax=plt.subplot(3,3,i+1)
-        ax.imshow(img.reshape(img_shape), cmap='gray')
+        ax.imshow(img.reshape((28,28)), cmap='gray')
         ax.axis('off')
     plt.savefig(filename, bbox_inches='tight')
     return fig
 
 def plot_training_samples_improvement(samples, filename="samples_training_progress.png"):
-    nepoch = len(samples)
-    fig = plt.figure( figsize=(18,2*((nepoch-1)//5)+1) )
-    for i in range(0,nepoch,5):
-        for j, img in enumerate(samples[i]):
-            ax=plt.subplot((nepoch-1)//5 + 1,9,i*9/5 + j+1)
-            ax.imshow(img.reshape(img_shape), cmap='gray')
+    nepoch = len(samples) - 1 # the first one is set of images before training
+    fig = plt.figure( figsize=(18,2*((nepoch-1)//5)+2) )
+    epoch_idx = 0
+    while True:
+        # plot
+        for j, img in enumerate(samples[epoch_idx]):
+            ax=plt.subplot((nepoch-1)//5 + 2, 9, epoch_idx*9/5 + j+1)
+            ax.imshow(img.reshape((28,28)), cmap='gray')
             ax.axis('off')
             if j==0:
-                ax.set_title("epoch %d"%(i+1))
+                if epoch_idx == 0:
+                    ax.set_title("Before training")
+                else:
+                    ax.set_title("epoch %d"%(epoch_idx))
+        # the epoch we want to plot next
+        if epoch_idx == nepoch:
+            break
+        elif epoch_idx <= nepoch-5:
+            epoch_idx = epoch_idx+5
+        else:
+            epoch_idx = nepoch
     plt.savefig(filename, bbox_inches='tight')
     return fig
 
