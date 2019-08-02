@@ -1,3 +1,3 @@
 Tend to generate "1" (I guess 1, 4, 7, 9 all look similar)
 Learning rate of the generator cannot be too small nor too big.
-In this case, results are really bad when we train the generator after the discriminator has been trained for 2, 5, 10, 20, 100 times.
+In this case, it is not helpful to train the generator after the discriminator has been trained for 2, 5, 10, 20, 100 times.
